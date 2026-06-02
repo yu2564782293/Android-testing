@@ -29,3 +29,10 @@ jobs:
 
       - name: Build debug APK
         run: gradle :app:assembleDebug
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: gomoku-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
