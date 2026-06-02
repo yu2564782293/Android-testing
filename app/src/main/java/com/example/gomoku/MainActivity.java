@@ -16,9 +16,16 @@ import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
+import java.util.ArrayList;
+import java.util.List;
+
 public class MainActivity extends Activity {
     private GomokuView boardView;
     private TextView statusView;
+    private TextView scoreView;
+    private Button undoButton;
+    private int blackScore = 0;
+    private int whiteScore = 0;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -41,6 +48,17 @@ public class MainActivity extends Activity {
                 LinearLayout.LayoutParams.WRAP_CONTENT
         ));
 
+        scoreView = new TextView(this);
+        scoreView.setTextColor(Color.rgb(126, 78, 28));
+        scoreView.setTextSize(16);
+        scoreView.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams scoreParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        scoreParams.setMargins(0, dp(4), 0, 0);
+        root.addView(scoreView, scoreParams);
+
         statusView = new TextView(this);
         statusView.setText("黑棋先手，请落子");
         statusView.setTextColor(Color.rgb(96, 63, 26));
@@ -57,15 +75,24 @@ public class MainActivity extends Activity {
             @Override
             public void onTurnChanged(int currentPlayer) {
                 statusView.setText(currentPlayer == GomokuView.BLACK ? "轮到黑棋" : "轮到白棋");
+                updateControls();
             }
 
             @Override
             public void onGameOver(int winner) {
+                if (winner == GomokuView.BLACK) {
+                    blackScore++;
+                } else {
+                    whiteScore++;
+                }
+                updateScoreView();
+                updateControls();
+
                 String message = winner == GomokuView.BLACK ? "黑棋获胜！" : "白棋获胜！";
                 statusView.setText(message);
                 new AlertDialog.Builder(MainActivity.this)
                         .setTitle("游戏结束")
-                        .setMessage(message)
+                        .setMessage(message + "\n获胜五子已用红线标出。")
                         .setPositiveButton("再来一局", (dialog, which) -> resetGame())
                         .setNegativeButton("看看棋盘", null)
                         .show();
@@ -74,12 +101,24 @@ public class MainActivity extends Activity {
             @Override
             public void onDrawGame() {
                 statusView.setText("平局！棋盘已满");
+                updateControls();
                 new AlertDialog.Builder(MainActivity.this)
                         .setTitle("游戏结束")
                         .setMessage("平局！棋盘已满")
                         .setPositiveButton("再来一局", (dialog, which) -> resetGame())
                         .setNegativeButton("看看棋盘", null)
                         .show();
+            }
+
+            @Override
+            public void onInvalidMove(String message) {
+                statusView.setText(message);
+            }
+
+            @Override
+            public void onBoardChanged(int currentPlayer) {
+                statusView.setText(currentPlayer == GomokuView.BLACK ? "轮到黑棋" : "轮到白棋");
+                updateControls();
             }
         });
         root.addView(boardView, new LinearLayout.LayoutParams(
@@ -88,24 +127,59 @@ public class MainActivity extends Activity {
                 1f
         ));
 
+        LinearLayout buttonRow = new LinearLayout(this);
+        buttonRow.setOrientation(LinearLayout.HORIZONTAL);
+        buttonRow.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams buttonRowParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        buttonRowParams.setMargins(0, dp(12), 0, 0);
+        root.addView(buttonRow, buttonRowParams);
+
+        undoButton = new Button(this);
+        undoButton.setText("悔棋");
+        undoButton.setAllCaps(false);
+        undoButton.setTextSize(16);
+        undoButton.setOnClickListener(v -> {
+            if (boardView.undoLastMove()) {
+                updateControls();
+            }
+        });
+        LinearLayout.LayoutParams undoParams = new LinearLayout.LayoutParams(0,
+                LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+        undoParams.setMargins(0, 0, dp(6), 0);
+        buttonRow.addView(undoButton, undoParams);
+
         Button resetButton = new Button(this);
         resetButton.setText("重新开始");
         resetButton.setAllCaps(false);
         resetButton.setTextSize(16);
         resetButton.setOnClickListener(v -> resetGame());
-        LinearLayout.LayoutParams buttonParams = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-        );
-        buttonParams.setMargins(0, dp(12), 0, 0);
-        root.addView(resetButton, buttonParams);
+        LinearLayout.LayoutParams resetParams = new LinearLayout.LayoutParams(0,
+                LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+        resetParams.setMargins(dp(6), 0, 0, 0);
+        buttonRow.addView(resetButton, resetParams);
 
+        updateScoreView();
+        updateControls();
         setContentView(root);
     }
 
     private void resetGame() {
         boardView.reset();
         statusView.setText("黑棋先手，请落子");
+        updateControls();
+    }
+
+    private void updateScoreView() {
+        scoreView.setText("比分  黑棋 " + blackScore + " : " + whiteScore + " 白棋");
+    }
+
+    private void updateControls() {
+        if (undoButton != null && boardView != null) {
+            undoButton.setEnabled(boardView.canUndo());
+        }
     }
 
     private int dp(int value) {
@@ -120,11 +194,13 @@ public class MainActivity extends Activity {
         private static final int WIN_COUNT = 5;
 
         private final int[][] board = new int[BOARD_SIZE][BOARD_SIZE];
+        private final List<Move> moveHistory = new ArrayList<>();
         private final Paint boardPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Paint linePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Paint starPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Paint piecePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Paint textPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint winPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final GameListener listener;
 
         private int currentPlayer = BLACK;
@@ -136,6 +212,10 @@ public class MainActivity extends Activity {
         private int moveCount = 0;
         private int lastRow = -1;
         private int lastCol = -1;
+        private int winStartRow = -1;
+        private int winStartCol = -1;
+        private int winEndRow = -1;
+        private int winEndCol = -1;
 
         public GomokuView(Activity context, GameListener listener) {
             super(context);
@@ -155,6 +235,11 @@ public class MainActivity extends Activity {
             textPaint.setColor(Color.rgb(120, 78, 32));
             textPaint.setTextSize(24f);
             textPaint.setTextAlign(Paint.Align.CENTER);
+
+            winPaint.setColor(Color.rgb(225, 56, 42));
+            winPaint.setStrokeWidth(8f);
+            winPaint.setStrokeCap(Paint.Cap.ROUND);
+            winPaint.setStyle(Paint.Style.STROKE);
         }
 
         @Override
@@ -163,6 +248,7 @@ public class MainActivity extends Activity {
             calculateBoardArea();
             drawBoard(canvas);
             drawPieces(canvas);
+            drawWinningLine(canvas);
         }
 
         private void calculateBoardArea() {
@@ -227,19 +313,40 @@ public class MainActivity extends Activity {
             }
         }
 
+        private void drawWinningLine(Canvas canvas) {
+            if (winStartRow < 0 || winEndRow < 0) {
+                return;
+            }
+            float startX = boardLeft + winStartCol * cellSize;
+            float startY = boardTop + winStartRow * cellSize;
+            float endX = boardLeft + winEndCol * cellSize;
+            float endY = boardTop + winEndRow * cellSize;
+            canvas.drawLine(startX, startY, endX, endY, winPaint);
+        }
+
         @Override
         public boolean onTouchEvent(MotionEvent event) {
-            if (event.getAction() != MotionEvent.ACTION_UP || gameOver || cellSize <= 0) {
+            if (event.getAction() != MotionEvent.ACTION_UP || cellSize <= 0) {
+                return true;
+            }
+            if (gameOver) {
+                listener.onInvalidMove("本局已结束，请重新开始");
                 return true;
             }
 
             int col = Math.round((event.getX() - boardLeft) / cellSize);
             int row = Math.round((event.getY() - boardTop) / cellSize);
-            if (row < 0 || row >= BOARD_SIZE || col < 0 || col >= BOARD_SIZE || board[row][col] != EMPTY) {
+            if (row < 0 || row >= BOARD_SIZE || col < 0 || col >= BOARD_SIZE) {
+                listener.onInvalidMove("请点击棋盘交叉点落子");
+                return true;
+            }
+            if (board[row][col] != EMPTY) {
+                listener.onInvalidMove("这里已经有棋子了");
                 return true;
             }
 
             board[row][col] = currentPlayer;
+            moveHistory.add(new Move(row, col, currentPlayer));
             lastRow = row;
             lastCol = col;
             moveCount++;
@@ -265,22 +372,68 @@ public class MainActivity extends Activity {
         }
 
         private boolean hasFiveInLine(int row, int col, int player) {
-            return count(row, col, 1, 0, player) + count(row, col, -1, 0, player) - 1 >= WIN_COUNT
-                    || count(row, col, 0, 1, player) + count(row, col, 0, -1, player) - 1 >= WIN_COUNT
-                    || count(row, col, 1, 1, player) + count(row, col, -1, -1, player) - 1 >= WIN_COUNT
-                    || count(row, col, 1, -1, player) + count(row, col, -1, 1, player) - 1 >= WIN_COUNT;
+            return updateWinningLine(row, col, 1, 0, player)
+                    || updateWinningLine(row, col, 0, 1, player)
+                    || updateWinningLine(row, col, 1, 1, player)
+                    || updateWinningLine(row, col, 1, -1, player);
         }
 
-        private int count(int row, int col, int rowStep, int colStep, int player) {
-            int total = 0;
-            int r = row;
-            int c = col;
-            while (r >= 0 && r < BOARD_SIZE && c >= 0 && c < BOARD_SIZE && board[r][c] == player) {
-                total++;
-                r += rowStep;
-                c += colStep;
+        private boolean updateWinningLine(int row, int col, int rowStep, int colStep, int player) {
+            int startRow = row;
+            int startCol = col;
+            while (isSamePiece(startRow - rowStep, startCol - colStep, player)) {
+                startRow -= rowStep;
+                startCol -= colStep;
             }
-            return total;
+
+            int endRow = row;
+            int endCol = col;
+            while (isSamePiece(endRow + rowStep, endCol + colStep, player)) {
+                endRow += rowStep;
+                endCol += colStep;
+            }
+
+            int total = Math.max(Math.abs(endRow - startRow), Math.abs(endCol - startCol)) + 1;
+            if (total >= WIN_COUNT) {
+                winStartRow = startRow;
+                winStartCol = startCol;
+                winEndRow = endRow;
+                winEndCol = endCol;
+                return true;
+            }
+            return false;
+        }
+
+        private boolean isSamePiece(int row, int col, int player) {
+            return row >= 0 && row < BOARD_SIZE && col >= 0 && col < BOARD_SIZE && board[row][col] == player;
+        }
+
+        public boolean undoLastMove() {
+            if (!canUndo()) {
+                return false;
+            }
+            Move lastMove = moveHistory.remove(moveHistory.size() - 1);
+            board[lastMove.row][lastMove.col] = EMPTY;
+            moveCount--;
+            currentPlayer = lastMove.player;
+            gameOver = false;
+            clearWinningLine();
+
+            if (moveHistory.isEmpty()) {
+                lastRow = -1;
+                lastCol = -1;
+            } else {
+                Move previousMove = moveHistory.get(moveHistory.size() - 1);
+                lastRow = previousMove.row;
+                lastCol = previousMove.col;
+            }
+            listener.onBoardChanged(currentPlayer);
+            invalidate();
+            return true;
+        }
+
+        public boolean canUndo() {
+            return !gameOver && !moveHistory.isEmpty();
         }
 
         public void reset() {
@@ -294,13 +447,36 @@ public class MainActivity extends Activity {
             moveCount = 0;
             lastRow = -1;
             lastCol = -1;
+            moveHistory.clear();
+            clearWinningLine();
             invalidate();
+        }
+
+        private void clearWinningLine() {
+            winStartRow = -1;
+            winStartCol = -1;
+            winEndRow = -1;
+            winEndCol = -1;
+        }
+
+        private static class Move {
+            final int row;
+            final int col;
+            final int player;
+
+            Move(int row, int col, int player) {
+                this.row = row;
+                this.col = col;
+                this.player = player;
+            }
         }
 
         public interface GameListener {
             void onTurnChanged(int currentPlayer);
             void onGameOver(int winner);
             void onDrawGame();
+            void onInvalidMove(String message);
+            void onBoardChanged(int currentPlayer);
         }
     }
 }
